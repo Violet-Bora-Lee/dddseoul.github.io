@@ -1,1 +1,104 @@
+<script>
+(function(){
+  // Toggle console logs with either window.ANALYTICS_DEBUG = true or <body data-analytics-debug="true">
+  var DEBUG = !!(window.ANALYTICS_DEBUG || (document.body && document.body.getAttribute('data-analytics-debug') === 'true'));
+
+  function log() {
+    if (!DEBUG) return;
+    try { console.debug.apply(console, arguments); } catch (_) {}
+  }
+
+  // Safe Clarity send (queues if not ready)
+  function sendClarityEvent(eventName, props) {
+    window.clarity = window.clarity || function(){ (window.clarity.q = window.clarity.q || []).push(arguments); };
+    try {
+      if (props !== undefined) window.clarity('event', eventName, props);
+      else window.clarity('event', eventName);
+      log('[clarity] event queued:', eventName, props);
+    } catch (err) {
+      if (DEBUG) console.error('clarity send error', err);
+    }
+  }
+
+  // Utilities
+  function toInt(v, def) {
+    var n = parseInt(v, 10);
+    return isNaN(n) ? def : n;
+  }
+
+  document.addEventListener('click', function (e) {
+    try {
+      // Only track elements explicitly tagged with data-track-event (or their ancestors)
+      var el = e.target.closest && e.target.closest('[data-track-event]');
+      if (!el) return;
+
+      // Optional: allow disabling per element
+      if (el.getAttribute('data-track-disabled') === 'true') return;
+
+      var eventName = el.getAttribute('data-track-event');
+      if (!eventName) return;
+
+      // Determine anchor context (for href/target)
+      var anchor = (el.tagName === 'A') ? el : (el.closest && el.closest('a'));
+      var href = (el.getAttribute('href')) || (anchor && anchor.getAttribute('href')) || '';
+      var target = (el.getAttribute('target')) || (anchor && anchor.getAttribute('target')) || '';
+
+      // External detection
+      var isExternal = false;
+      if (href) {
+        try {
+          var url = new URL(href, location.href);
+          isExternal = url.hostname !== location.hostname;
+        } catch (err) {
+          isExternal = (href.indexOf('http') === 0 && href.indexOf(location.hostname) === -1);
+        }
+      }
+
+      // Build props from data-track-prop-*, with sensible defaults
+      var props = {
+        label: el.getAttribute('data-track-prop-label') || (el.textContent && el.textContent.trim()) || '',
+        href: href,
+        external: isExternal
+      };
+
+      if (el.attributes && el.attributes.length) {
+        Array.prototype.forEach.call(el.attributes, function(attr) {
+          var m = attr.name.match(/^data-track-prop-(.+)/);
+          if (m) props[m[1]] = attr.value;
+        });
+      }
+
+      // Optional debounce per element (ms)
+      var debounceMs = toInt(el.getAttribute('data-track-debounce'), 0);
+      if (debounceMs > 0) {
+        var now = Date.now();
+        if (el.__lastTrack && (now - el.__lastTrack) < debounceMs) {
+          return;
+        }
+        el.__lastTrack = now;
+      }
+
+      // Send event
+      sendClarityEvent(eventName, props);
+
+      // Decide if we should delay navigation to avoid event loss
+      // - Only delay when navigating in the same tab (no target/_blank)
+      // - Only delay when link is external OR explicitly requested via data-track-prop-delay="true"
+      // - Do not delay if user used modifier keys (new tab window behavior)
+      var hasModifier = e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (e.button && e.button !== 0);
+      var optInDelay = el.getAttribute('data-track-prop-delay') === 'true';
+      var shouldDelay = !hasModifier && !target && (isExternal || optInDelay) && !!href;
+
+      if (shouldDelay) {
+        e.preventDefault();
+        var DELAY_MS = toInt(el.getAttribute('data-track-prop-delay-ms'), 200);
+        var hrefToGo = href;
+        setTimeout(function() { window.location.href = hrefToGo; }, DELAY_MS);
+      }
+    } catch (ex) {
+      if (DEBUG) console.error('tracking click handler error', ex);
+    }
+  }, false);
+})();
+</script>
 
